@@ -329,7 +329,7 @@ class CompressLLM(torch.nn.Module):
             # [B,V]->[B]
             next_token_id = torch.argmax(logit, dim=-1)
             # [B]->[B,E]->[B,1,E]
-            next_inputs_embeds = self.decoder.model.embed_tokens(next_token_id).unsqueeze(1).to(compress_token.device)
+            next_inputs_embeds = self.decoder.model.embed_tokens(next_token_id).unsqueeze(1).to(next_inputs_embeds.device)
             # next_position_ids:[B,S] -> [B,1]
             next_position_ids = next_position_ids[:,-1:]+1
             generate_text.append(next_token_id.item())

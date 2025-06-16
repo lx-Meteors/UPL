@@ -17,7 +17,7 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 import argparse
 
 from pre_prepare_data import get_examples
-from model.modeling import get_model, save_adapter, load_adapter
+from model.modeling500x import get_model, save_adapter, load_adapter
 from pre_dataloader import get_dataset
 
 import logging
