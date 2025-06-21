@@ -39,7 +39,7 @@ logging.basicConfig(
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--work_dir', type=str, default='project',required=False, help='Directory including the configuration file, for saving model')
+    parser.add_argument('--work_dir', type=str, default='../experiment/ICAE_Llama-3.2-1B_DPL',required=False, help='Directory including the configuration file, for saving model')
     parser.add_argument('--port', type=str, default='14527', required=False, help='port for ddp training')
     return parser.parse_args()
 
@@ -171,8 +171,8 @@ def train(rank, args, world_size):
 # Launch multi-process training
 if __name__ == "__main__":
     args = parse_args()
-    world_size = torch.cuda.device_count()
-
+    # world_size = torch.cuda.device_count()
+    world_size = 4
     output_dir = "output"
     if not os.path.exists(os.path.join(args.work_dir,output_dir)):
         os.makedirs(os.path.join(args.work_dir,output_dir))

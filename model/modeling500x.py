@@ -186,7 +186,8 @@ class CompressLLM(torch.nn.Module):
             ########################################################################################
             expand_mem = self.mem_tokens.unsqueeze(0).expand(bsz, self.mem_size, emb_size)
 
-            encode_inputs_embeds = torch.cat([inputs_embeds, expand_mem], dim=1)
+            # encode_inputs_embeds = torch.cat([inputs_embeds, expand_mem], dim=1)
+            encode_inputs_embeds, mem_indices = self.interleave_inputs_with_mem_and_get_indices(inputs_embeds, expand_mem)
 
             # [1,seq_len]
             position_ids = torch.arange(start_idx + 1, end_idx + 1, device=inputs_embeds.device).unsqueeze(0)
@@ -195,6 +196,7 @@ class CompressLLM(torch.nn.Module):
             # [1,seq_len+mem_size]
             encode_position_ids = torch.cat([position_ids, mem_position_ids], dim=1)
             # print(f"encode_position_ids:{encode_position_ids}")
+            # attention_mask = self.build_compress_aware_causal_mask(encode_position_ids.shape[1], mem_indices, device=inputs_embeds.device).unsqueeze(0).unsqueeze(0).to(dtype=inputs_embeds.dtype)
 
             if compress_token_ids is None:
                 compress_token_ids = mem_position_ids
@@ -221,7 +223,7 @@ class CompressLLM(torch.nn.Module):
             past_key_values = outputs.past_key_values
             # print(past_key_values.shape)
             trimmed_past_key_values = tuple(
-                (layer_key[:, :, -self.mem_size:, :], layer_value[:, :, -self.mem_size:, :])
+                (layer_key[:, :, mem_indices, :], layer_value[:, :, mem_indices, :])
                 for layer_key, layer_value in past_key_values
             )
             all_trimmed_past_key_values.append(trimmed_past_key_values)
@@ -381,6 +383,50 @@ class CompressLLM(torch.nn.Module):
             if next_token_id.item() == self.tokenizer.eos_token_id:
                 return generate_text
         return generate_text
+
+    def interleave_inputs_with_mem_and_get_indices(self, inputs_embeds, expand_mem, insert_every=5):
+        B, T, D = inputs_embeds.shape
+        _, N, _ = expand_mem.shape
+
+        chunks = torch.split(inputs_embeds, insert_every, dim=1)
+        output_chunks = []
+        mem_indices = []
+
+        curr_idx = 0
+        for i, chunk in enumerate(chunks):
+            output_chunks.append(chunk)
+            curr_idx += chunk.shape[1]
+            if i < N:
+                mem_i = expand_mem[:, i:i + 1, :]
+                output_chunks.append(mem_i)
+                mem_indices.append(curr_idx)  # index of inserted mem
+                curr_idx += 1
+
+        output = torch.cat(output_chunks, dim=1)  # [B, T+N, D]
+        return output, mem_indices
+
+    def build_compress_aware_causal_mask(self, total_len, compress_indices, device="cuda"):
+        """
+        构建 Compress-Aware 因果注意力 mask（适配 scaled_dot_product_attention）
+        返回一个 [T+N, T+N] 的 mask，dtype=float32，禁止 attend 位置为 -inf，允许 attend 为 0.0
+        """
+        mask = torch.triu(torch.ones(total_len, total_len, device=device), diagonal=1).bool()
+
+        compress_set = set(compress_indices)
+        for i in range(total_len):
+            for j in range(total_len):
+                if i in compress_set:
+                    # 当前是 compress-token
+                    if j in compress_set and j != i:
+                        mask[i, j] = True  # 禁止看其他 compress
+                else:
+                    if j in compress_set:
+                        mask[i, j] = True  # input-token 禁止看 compress
+
+        # 将bool mask转float mask：True->-inf，False->0.0
+        float_mask = torch.where(mask, torch.tensor(float('-inf'), device=device), torch.tensor(0.0, device=device))
+
+        return float_mask
 
 
 def freeze_encoder(model):
