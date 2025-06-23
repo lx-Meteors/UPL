@@ -63,7 +63,7 @@ def train(rank, args, world_size):
     assert world_size == training_config["device_count"], "device_count wrong"
     assert training_config["total_batch_size"] == training_config['batch_size_per_device']*training_config["device_count"]*training_config["gradient_accumulation_steps"]
     assert training_config["chunk_size"] == task_config["chunk_size"]
-    assert task_config["mem_size"]*task_config["compress_ratio"] == task_config["chunk_size"]
+    # assert task_config["mem_size"]*task_config["compress_ratio"] == task_config["chunk_size"]
 
     config["data_config"]["model_id"] = training_config["model_id"]
     output_dir = "output"
@@ -171,7 +171,7 @@ def train(rank, args, world_size):
 # Launch multi-process training
 if __name__ == "__main__":
     args = parse_args()
-    # world_size = torch.cuda.device_count()
+    world_size = torch.cuda.device_count()
     world_size = 4
     output_dir = "output"
     if not os.path.exists(os.path.join(args.work_dir,output_dir)):

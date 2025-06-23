@@ -28,6 +28,7 @@ class CompressLLM(torch.nn.Module):
             torch_dtype=torch.bfloat16,
             device_map=f"cuda:{device_rank}",
         )
+        self.decoder = self.model
         self.decoder = AutoModelForCausalLM.from_pretrained(
             model_id,
             torch_dtype=torch.bfloat16,
@@ -407,25 +408,28 @@ class CompressLLM(torch.nn.Module):
 
     def build_compress_aware_causal_mask(self, total_len, compress_indices, device="cuda"):
         """
-        构建 Compress-Aware 因果注意力 mask（适配 scaled_dot_product_attention）
-        返回一个 [T+N, T+N] 的 mask，dtype=float32，禁止 attend 位置为 -inf，允许 attend 为 0.0
+        构建一个 float 型 attention mask：
+        - input-token 遵循 causal 结构
+        - compress-token 可以看到所有 token
+        - 返回: [total_len, total_len] 的 float32 tensor，值为 0.0 或 -inf
         """
-        mask = torch.triu(torch.ones(total_len, total_len, device=device), diagonal=1).bool()
+        mask = torch.zeros((total_len, total_len), dtype=torch.float32, device=device)
 
-        compress_set = set(compress_indices)
+        # causal mask
+        causal = torch.tril(torch.ones((total_len, total_len), dtype=torch.float32, device=device))
+
+        # compress token index mask
+        compress_mask = torch.zeros(total_len, dtype=torch.bool, device=device)
+        compress_mask[compress_indices] = True
+
         for i in range(total_len):
-            for j in range(total_len):
-                if i in compress_set:
-                    # 当前是 compress-token
-                    if j in compress_set and j != i:
-                        mask[i, j] = True  # 禁止看其他 compress
-                else:
-                    if j in compress_set:
-                        mask[i, j] = True  # input-token 禁止看 compress
+            if compress_mask[i]:
+                mask[i] = 1.0  # compress-token 行全为 1（全可见）
+            else:
+                mask[i] = causal[i]  # input-token 遵循 causal
 
-        # 将bool mask转float mask：True->-inf，False->0.0
-        float_mask = torch.where(mask, torch.tensor(float('-inf'), device=device), torch.tensor(0.0, device=device))
-
+        # 转换成 float mask：不可见（0）→ -inf，可见（1）→ 0.0
+        float_mask = torch.where(mask == 0, torch.tensor(float('-inf'), device=device), torch.tensor(0.0, device=device))
         return float_mask
 
 
