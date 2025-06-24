@@ -44,6 +44,14 @@ class CompressLLM(torch.nn.Module):
         self.compress_ratio = compress_ratio
         self.mem_size = mem_size
 
+        self.importance_proj = torch.nn.Sequential(
+            torch.nn.LayerNorm(config.hidden_size),
+            torch.nn.Linear(config.hidden_size, config.hidden_size // 2),
+            torch.nn.ReLU(),
+            torch.nn.Linear(config.hidden_size // 2, 1),
+            torch.nn.Sigmoid()
+        ).to(self.device).to(dtype=torch.bfloat16)
+
         mean = torch.mean(self.model.model.embed_tokens.weight).item()
         std = torch.std(self.model.model.embed_tokens.weight).item()
         nn.init.normal_(self.mem_tokens, mean=mean, std=std)
@@ -155,6 +163,27 @@ class CompressLLM(torch.nn.Module):
     def get_uniform_position_ids(self, x_1, x_n, ratio):
         return torch.arange((x_1 + (ratio - 1) // 2), x_n, step=ratio, device=self.device).unsqueeze(0)
 
+    def get_dynamic_position_ids(self, inputs_embeds):
+        """
+        输入: inputs_embeds [B, L, D]
+        输出: mem_position_ids [B, mem_size]，表示每个 compress-token 应该分配的 RoPE 位置
+        """
+        bsz, seq_len, _ = inputs_embeds.shape
+        scores = self.importance_proj(inputs_embeds).squeeze(-1)  # [B, L]
+
+        select_k = min(self.mem_size, seq_len)
+        topk_idx = torch.topk(scores, select_k, dim=1).indices  # [B, select_k]
+        sorted_idx = topk_idx.sort(dim=1).values  # [B, select_k]
+
+        if select_k < self.mem_size:
+            pad_len = self.mem_size - select_k  # 还差多少个位置
+            last_val = sorted_idx[:, -1:]  # [B, 1] 最后一个位置
+            # 补上后续连续位置：[last+1, last+2, ..., last+pad_len]
+            pad_range = torch.arange(1, pad_len + 1, device=inputs_embeds.device).unsqueeze(0)  # [1, pad_len]
+            pad_values = last_val + pad_range  # [B, pad_len]
+            sorted_idx = torch.cat([sorted_idx, pad_values], dim=1)  # [B, mem_size]
+        return sorted_idx  # [B, 510]
+
     def compress(self, inputs):
         bsz, total_length = inputs['input_ids'].size()
         ######################################应该不需要截断context##########################################
@@ -175,7 +204,6 @@ class CompressLLM(torch.nn.Module):
             chunk_input_ids = inputs['input_ids'][:, start_idx:end_idx]
             # ->LlamaForCausalLM->LlamaModel->embed_tokens
             inputs_embeds = self.model.model.embed_tokens(chunk_input_ids)
-
             bsz, seq_len, emb_size = inputs_embeds.size()
 
             #################################不需要截断##############################################
@@ -191,7 +219,9 @@ class CompressLLM(torch.nn.Module):
             # [1,seq_len]
             position_ids = torch.arange(start_idx + 1, end_idx + 1, device=inputs_embeds.device).unsqueeze(0)
             # [1,mem_size]：compress token position information, the step is compression ratio
-            mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
+            # mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
+            mem_position_ids = self.get_dynamic_position_ids(inputs_embeds)
+            end_idx = mem_position_ids[:,-1].item()
             # [1,seq_len+mem_size]
             encode_position_ids = torch.cat([position_ids, mem_position_ids], dim=1)
             # print(f"encode_position_ids:{encode_position_ids}")
