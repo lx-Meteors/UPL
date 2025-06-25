@@ -44,13 +44,6 @@ class CompressLLM(torch.nn.Module):
         self.compress_ratio = compress_ratio
         self.mem_size = mem_size
 
-        self.importance_proj = torch.nn.Sequential(
-            torch.nn.LayerNorm(config.hidden_size),
-            torch.nn.Linear(config.hidden_size, config.hidden_size // 2),
-            torch.nn.ReLU(),
-            torch.nn.Linear(config.hidden_size // 2, 1),
-            torch.nn.Sigmoid()
-        ).to(self.device).to(dtype=torch.bfloat16)
 
         mean = torch.mean(self.model.model.embed_tokens.weight).item()
         std = torch.std(self.model.model.embed_tokens.weight).item()
@@ -171,12 +164,12 @@ class CompressLLM(torch.nn.Module):
         bsz, seq_len, _ = inputs_embeds.shape
         scores = self.importance_proj(inputs_embeds).squeeze(-1)  # [B, L]
 
-        select_k = min(self.mem_size, seq_len)
+        select_k = min(self.mem_size // 2, seq_len)
         topk_idx = torch.topk(scores, select_k, dim=1).indices  # [B, select_k]
         sorted_idx = topk_idx.sort(dim=1).values  # [B, select_k]
 
-        if select_k < self.mem_size:
-            pad_len = self.mem_size - select_k  # 还差多少个位置
+        if select_k < self.mem_size // 2:
+            pad_len = (self.mem_size // 2) - select_k  # 还差多少个位置
             last_val = sorted_idx[:, -1:]  # [B, 1] 最后一个位置
             # 补上后续连续位置：[last+1, last+2, ..., last+pad_len]
             pad_range = torch.arange(1, pad_len + 1, device=inputs_embeds.device).unsqueeze(0)  # [1, pad_len]
@@ -219,9 +212,7 @@ class CompressLLM(torch.nn.Module):
             # [1,seq_len]
             position_ids = torch.arange(start_idx + 1, end_idx + 1, device=inputs_embeds.device).unsqueeze(0)
             # [1,mem_size]：compress token position information, the step is compression ratio
-            # mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
-            mem_position_ids = self.get_dynamic_position_ids(inputs_embeds)
-            end_idx = mem_position_ids[:,-1].item()
+            mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
             # [1,seq_len+mem_size]
             encode_position_ids = torch.cat([position_ids, mem_position_ids], dim=1)
             # print(f"encode_position_ids:{encode_position_ids}")

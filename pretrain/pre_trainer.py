@@ -39,7 +39,7 @@ logging.basicConfig(
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--work_dir', type=str, default='project',required=False, help='Directory including the configuration file, for saving model')
+    parser.add_argument('--work_dir', type=str, default='../experiment/500x_1B_11',required=False, help='Directory including the configuration file, for saving model')
     parser.add_argument('--port', type=str, default='14527', required=False, help='port for ddp training')
     return parser.parse_args()
 
@@ -94,7 +94,11 @@ def train(rank, args, world_size):
     # check non-frozen parameters
     if rank == 0:
         count_parameters(model, config)
-    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+        print("🔧 Trainable parameters:\n")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print("name: ",name)
+    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=False)
     # Instantiate the data loader
     dataset = get_dataset(task_config["task_type"], train_examples, training_config['batch_size_per_device'])
     loader = DataLoader(dataset, batch_size=None)
@@ -128,7 +132,6 @@ def train(rank, args, world_size):
 
         for inputs in loader:
             step_num += 1
-
             if step_num % accumulation_steps == 0:
                 loss = training_step(ddp_model,inputs,rank,accumulation_steps)
             else:
