@@ -32,11 +32,11 @@
 # CUDA_VISIBLE_DEVICES=4,5,6,7 nohup python ./pre_trainer.py --work_dir '../experiment/500x_1B_13' --port 14571 > train.log 2>&1 &
 # tail -f train.log
 
-python ./pre_trainer.py --work_dir '../experiment/500x_1B_13' --port 14571
-python ./pre_evaluator.py --work_dir '../experiment/500x_1B_13' --batch_size 1
+CUDA_VISIBLE_DEVICES=3,5,6,7 python ./pre_trainer.py --work_dir '../experiment/500x_1B_13' --port 14571
+#python ./pre_evaluator.py --work_dir '../experiment/500x_1B_13' --batch_size 1
 cd ..
 cd sft
-python ./instruction_trainer.py --work_dir  '../experiment/500x_1B_12' --port 14527
-python ./instruction_evaluator.py --work_dir  '../experiment/500x_1B_12' --batch_size 1
+python ./instruction_trainer.py --work_dir  '../experiment/500x_1B_13' --port 14527
+python ./instruction_evaluator.py --work_dir  '../experiment/500x_1B_13' --batch_size 1
 
 # CUDA_VISIBLE_DEVICES=4,5,6,7 nohup python ./instruction_trainer.py --work_dir  '../experiment/500x_1B_12' --port 14527 > train.log 2>&1 &

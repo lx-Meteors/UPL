@@ -1,5 +1,8 @@
 import sys
 import os
+
+from triton.language import bfloat16
+
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from path_config import BASE_PATH
 sys.path.append(BASE_PATH)
@@ -43,7 +46,9 @@ class CompressLLM(torch.nn.Module):
         self.special_tokens = nn.Parameter(self.model.model.embed_tokens.weight.new_zeros((2, config.hidden_size)), requires_grad=True)
         self.compress_ratio = compress_ratio
         self.mem_size = mem_size
-
+        self.learned_mem_position_ids = nn.Parameter(
+            torch.linspace(3, 510, steps=self.mem_size).unsqueeze(0).contiguous().to(self.device)  # shape: [1, max_mem_size]
+        )
 
         mean = torch.mean(self.model.model.embed_tokens.weight).item()
         std = torch.std(self.model.model.embed_tokens.weight).item()
@@ -56,7 +61,7 @@ class CompressLLM(torch.nn.Module):
         loss_info = {}
 
         # context position ids:[1,......,end_idx]
-        concatenated_past_key_values, end_idx = self.compress(inputs)
+        concatenated_past_key_values, end_idx, mem_position_ids = self.compress(inputs)
 
 ##########################################################AE Task########################################################################
 
@@ -146,7 +151,7 @@ class CompressLLM(torch.nn.Module):
 
 
         loss = tot_loss/tot_task
-        return {"loss":loss, "loss_info":loss_info}
+        return {"loss":loss, "loss_info":loss_info, "position_ids":mem_position_ids}
 
     def compute_num_chunks(self, total_length):
         assert total_length > 0
@@ -212,7 +217,8 @@ class CompressLLM(torch.nn.Module):
             # [1,seq_len]
             position_ids = torch.arange(start_idx + 1, end_idx + 1, device=inputs_embeds.device).unsqueeze(0)
             # [1,mem_size]：compress token position information, the step is compression ratio
-            mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
+            # mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
+            mem_position_ids = self.learned_mem_position_ids
             # [1,seq_len+mem_size]
             encode_position_ids = torch.cat([position_ids, mem_position_ids], dim=1)
             # print(f"encode_position_ids:{encode_position_ids}")
@@ -275,7 +281,7 @@ class CompressLLM(torch.nn.Module):
 
 
 
-        return concatenated_past_key_values, end_idx
+        return concatenated_past_key_values, end_idx, mem_position_ids
 
     def lm_inference(self,inputs,generate_num=1024):
         concatenated_past_key_values, end_idx = self.compress(inputs)
@@ -406,7 +412,7 @@ class CompressLLM(torch.nn.Module):
 
 def freeze_encoder(model):
     for name, param in model.named_parameters():
-        if name == "mem_tokens" or name == "special_tokens":
+        if name == "mem_tokens" or name == "special_tokens" or name == "learned_mem_position_ids":
             continue
         param.requires_grad = False
 

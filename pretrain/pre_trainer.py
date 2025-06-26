@@ -15,7 +15,7 @@ import json
 from tqdm import tqdm
 from transformers.models.llama.configuration_llama import LlamaConfig
 import argparse
-
+from util.modify_code import modify_llama
 from pre_prepare_data import get_examples
 from model.modeling500x import get_model, save_adapter, load_adapter
 from pre_dataloader import get_dataset
@@ -35,7 +35,7 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
+modify_llama()
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -98,7 +98,7 @@ def train(rank, args, world_size):
         for name, param in model.named_parameters():
             if param.requires_grad:
                 print("name: ",name)
-    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=False)
+    ddp_model = DDP(model, device_ids=[rank], find_unused_parameters=True)
     # Instantiate the data loader
     dataset = get_dataset(task_config["task_type"], train_examples, training_config['batch_size_per_device'])
     loader = DataLoader(dataset, batch_size=None)
@@ -133,17 +133,18 @@ def train(rank, args, world_size):
         for inputs in loader:
             step_num += 1
             if step_num % accumulation_steps == 0:
-                loss = training_step(ddp_model,inputs,rank,accumulation_steps)
+                loss, position_ids = training_step(ddp_model,inputs,rank,accumulation_steps)
             else:
                 with ddp_model.no_sync():
-                    loss = training_step(ddp_model,inputs,rank,accumulation_steps)
+                    loss, position_ids = training_step(ddp_model,inputs,rank,accumulation_steps)
 
             info_list.append({
                 "run_time(hours)":(time.time()- start_time)/3600,
                 "total_steps":training_steps,
                 "steps":step_num/accumulation_steps, 
                 "training_loss":loss, 
-                "learning_rate":optimizer.param_groups[0]['lr']})
+                "learning_rate":optimizer.param_groups[0]['lr'],
+                "position_ids":position_ids})
             
             if rank==0:
                 wandb.log({
