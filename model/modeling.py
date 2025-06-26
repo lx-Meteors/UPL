@@ -200,7 +200,16 @@ class CompressLLM(torch.nn.Module):
             ########################################################################################
             expand_mem = self.mem_tokens.unsqueeze(0).expand(bsz, self.mem_size, emb_size)
 
-            encode_inputs_embeds = torch.cat([inputs_embeds, expand_mem], dim=1)
+            # todo: 处理非第一块制作mask | compress-token拼接第二块
+            if compress_token is not None:
+                # todo: 均匀插入
+                encode_inputs_embeds, mem_indices = self.interleave_inputs_with_mem_and_get_indices(inputs_embeds, expand_mem)
+                compress_token_ids = torch.cat((compress_token, encode_inputs_embeds), dim=1)
+
+
+            # encode_inputs_embeds = torch.cat([inputs_embeds, expand_mem], dim=1)
+            # todo: 均匀插入
+            encode_inputs_embeds, mem_indices = self.interleave_inputs_with_mem_and_get_indices(inputs_embeds, expand_mem)
 
             # [1,seq_len]
             position_ids = torch.arange(start_idx + 1, end_idx + 1, device=inputs_embeds.device).unsqueeze(0)
@@ -224,7 +233,9 @@ class CompressLLM(torch.nn.Module):
 
             hidden_states = outputs.hidden_states[-1]
             # [B,mem_size,emb_size]
-            mem_hidden = hidden_states[:, -self.mem_size:]
+            # mem_hidden = hidden_states[:, -self.mem_size:]
+            # todo: 取compress-token
+            mem_hidden = hidden_states[:, mem_indices]
             # 在第一次循环时初始化 compress_token
             if compress_token is None:
                 compress_token = mem_hidden
@@ -312,8 +323,27 @@ class CompressLLM(torch.nn.Module):
                 return generate_text
         return generate_text
 
+    # todo: 均匀插入
+    def interleave_inputs_with_mem_and_get_indices(self, inputs_embeds, expand_mem, insert_every=5):
+        B, T, D = inputs_embeds.shape
+        _, N, _ = expand_mem.shape
 
+        chunks = torch.split(inputs_embeds, insert_every, dim=1)
+        output_chunks = []
+        mem_indices = []
 
+        curr_idx = 0
+        for i, chunk in enumerate(chunks):
+            output_chunks.append(chunk)
+            curr_idx += chunk.shape[1]
+            if i < N:
+                mem_i = expand_mem[:, i:i + 1, :]
+                output_chunks.append(mem_i)
+                mem_indices.append(curr_idx)  # index of inserted mem
+                curr_idx += 1
+
+        output = torch.cat(output_chunks, dim=1)  # [B, T+N, D]
+        return output, mem_indices
     # def forward(self, inputs):
     #     loss_info = {}
     #     inputs_embeds = self.model.model.embed_tokens(inputs["input_ids"])
