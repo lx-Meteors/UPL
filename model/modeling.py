@@ -200,13 +200,6 @@ class CompressLLM(torch.nn.Module):
             ########################################################################################
             expand_mem = self.mem_tokens.unsqueeze(0).expand(bsz, self.mem_size, emb_size)
 
-            # todo: 处理非第一块制作mask | compress-token拼接第二块
-            if compress_token is not None:
-                # todo: 均匀插入
-                encode_inputs_embeds, mem_indices = self.interleave_inputs_with_mem_and_get_indices(inputs_embeds, expand_mem)
-                compress_token_ids = torch.cat((compress_token, encode_inputs_embeds), dim=1)
-
-
             # encode_inputs_embeds = torch.cat([inputs_embeds, expand_mem], dim=1)
             # todo: 均匀插入
             encode_inputs_embeds, mem_indices = self.interleave_inputs_with_mem_and_get_indices(inputs_embeds, expand_mem)
@@ -218,6 +211,24 @@ class CompressLLM(torch.nn.Module):
             # [1,seq_len+mem_size]
             encode_position_ids = torch.cat([position_ids, mem_position_ids], dim=1)
             # print(f"encode_position_ids:{encode_position_ids}")
+
+            # todo: 处理非第一块 | compress-token拼接第二块
+            if compress_token is not None:
+                # todo: 均匀插入
+                encode_inputs_embeds, mem_indices = self.interleave_inputs_with_mem_and_get_indices(inputs_embeds,
+                                                                                                    expand_mem)
+                compress_token_ids = torch.cat((compress_token, encode_inputs_embeds), dim=1)
+                if self.task_config["use_pe"]:
+                    outputs = self.model(position_ids=encode_position_ids, inputs_embeds=encode_inputs_embeds,
+                                         output_hidden_states=True)
+                else:
+                    outputs = self.model(inputs_embeds=encode_inputs_embeds, output_hidden_states=True)
+
+                hidden_states = outputs.hidden_states[-1]
+                mem_hidden = hidden_states[:, mem_indices]
+                # 将新的 mem_hidden 拼接到 compress_token
+                compress_token = torch.cat((compress_token, mem_hidden), dim=1)
+                continue
 
             if compress_token_ids is None:
                 compress_token_ids = mem_position_ids
