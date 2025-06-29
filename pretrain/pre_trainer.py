@@ -39,7 +39,7 @@ modify_llama()
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--work_dir', type=str, default='../experiment/500x_1B_11',required=False, help='Directory including the configuration file, for saving model')
+    parser.add_argument('--work_dir', type=str, default='../experiment/500x_1B_14',required=False, help='Directory including the configuration file, for saving model')
     parser.add_argument('--port', type=str, default='14527', required=False, help='port for ddp training')
     return parser.parse_args()
 
@@ -133,18 +133,17 @@ def train(rank, args, world_size):
         for inputs in loader:
             step_num += 1
             if step_num % accumulation_steps == 0:
-                loss, position_ids = training_step(ddp_model,inputs,rank,accumulation_steps)
+                loss = training_step(ddp_model,inputs,rank,accumulation_steps)
             else:
                 with ddp_model.no_sync():
-                    loss, position_ids = training_step(ddp_model,inputs,rank,accumulation_steps)
+                    loss = training_step(ddp_model,inputs,rank,accumulation_steps)
 
             info_list.append({
                 "run_time(hours)":(time.time()- start_time)/3600,
                 "total_steps":training_steps,
                 "steps":step_num/accumulation_steps, 
                 "training_loss":loss, 
-                "learning_rate":optimizer.param_groups[0]['lr'],
-                "position_ids":position_ids})
+                "learning_rate":optimizer.param_groups[0]['lr']})
             
             if rank==0:
                 wandb.log({

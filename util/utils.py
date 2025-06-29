@@ -89,14 +89,13 @@ def training_step(ddp_model, inputs, rank, accumulation_steps):
     # inputs = {key:value.to(rank) for key,value in inputs.items()}
     inputs = {key:(value.to(rank) if value is not None else None) for key,value in inputs.items()}
     output = ddp_model(inputs=inputs)
-    position_ids = output["position_ids"]
     loss = output["loss"]
     loss /= accumulation_steps
     loss.backward()
     # 计算当前的梯度范数
     # grad_norm = calculate_gradient_norm(ddp_model)
     # output["loss_info"]["grad_norm"] = grad_norm
-    return output["loss_info"], position_ids
+    return output["loss_info"]
 
 
 

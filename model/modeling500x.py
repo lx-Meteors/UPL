@@ -46,9 +46,6 @@ class CompressLLM(torch.nn.Module):
         self.special_tokens = nn.Parameter(self.model.model.embed_tokens.weight.new_zeros((2, config.hidden_size)), requires_grad=True)
         self.compress_ratio = compress_ratio
         self.mem_size = mem_size
-        self.learned_mem_position_ids = nn.Parameter(
-            torch.linspace(3, 510, steps=self.mem_size).unsqueeze(0).contiguous().to(self.device)  # shape: [1, max_mem_size]
-        )
 
         mean = torch.mean(self.model.model.embed_tokens.weight).item()
         std = torch.std(self.model.model.embed_tokens.weight).item()
@@ -61,7 +58,7 @@ class CompressLLM(torch.nn.Module):
         loss_info = {}
 
         # context position ids:[1,......,end_idx]
-        concatenated_past_key_values, end_idx, mem_position_ids = self.compress(inputs)
+        concatenated_past_key_values, end_idx = self.compress(inputs)
 
 ##########################################################AE Task########################################################################
 
@@ -151,7 +148,7 @@ class CompressLLM(torch.nn.Module):
 
 
         loss = tot_loss/tot_task
-        return {"loss":loss, "loss_info":loss_info, "position_ids":mem_position_ids}
+        return {"loss":loss, "loss_info":loss_info}
 
     def compute_num_chunks(self, total_length):
         assert total_length > 0
@@ -160,27 +157,6 @@ class CompressLLM(torch.nn.Module):
 
     def get_uniform_position_ids(self, x_1, x_n, ratio):
         return torch.arange((x_1 + (ratio - 1) // 2), x_n, step=ratio, device=self.device).unsqueeze(0)
-
-    def get_dynamic_position_ids(self, inputs_embeds):
-        """
-        输入: inputs_embeds [B, L, D]
-        输出: mem_position_ids [B, mem_size]，表示每个 compress-token 应该分配的 RoPE 位置
-        """
-        bsz, seq_len, _ = inputs_embeds.shape
-        scores = self.importance_proj(inputs_embeds).squeeze(-1)  # [B, L]
-
-        select_k = min(self.mem_size // 2, seq_len)
-        topk_idx = torch.topk(scores, select_k, dim=1).indices  # [B, select_k]
-        sorted_idx = topk_idx.sort(dim=1).values  # [B, select_k]
-
-        if select_k < self.mem_size // 2:
-            pad_len = (self.mem_size // 2) - select_k  # 还差多少个位置
-            last_val = sorted_idx[:, -1:]  # [B, 1] 最后一个位置
-            # 补上后续连续位置：[last+1, last+2, ..., last+pad_len]
-            pad_range = torch.arange(1, pad_len + 1, device=inputs_embeds.device).unsqueeze(0)  # [1, pad_len]
-            pad_values = last_val + pad_range  # [B, pad_len]
-            sorted_idx = torch.cat([sorted_idx, pad_values], dim=1)  # [B, mem_size]
-        return sorted_idx  # [B, 510]
 
     def compress(self, inputs):
         bsz, total_length = inputs['input_ids'].size()
@@ -217,8 +193,7 @@ class CompressLLM(torch.nn.Module):
             # [1,seq_len]
             position_ids = torch.arange(start_idx + 1, end_idx + 1, device=inputs_embeds.device).unsqueeze(0)
             # [1,mem_size]：compress token position information, the step is compression ratio
-            # mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
-            mem_position_ids = self.learned_mem_position_ids
+            mem_position_ids = self.get_uniform_position_ids(x_1=start_idx + 1, x_n=start_idx+chunk_size, ratio=self.compress_ratio)
             # [1,seq_len+mem_size]
             encode_position_ids = torch.cat([position_ids, mem_position_ids], dim=1)
             # print(f"encode_position_ids:{encode_position_ids}")
@@ -281,7 +256,7 @@ class CompressLLM(torch.nn.Module):
 
 
 
-        return concatenated_past_key_values, end_idx, mem_position_ids
+        return concatenated_past_key_values, end_idx
 
     def lm_inference(self,inputs,generate_num=1024):
         concatenated_past_key_values, end_idx = self.compress(inputs)
@@ -412,7 +387,7 @@ class CompressLLM(torch.nn.Module):
 
 def freeze_encoder(model):
     for name, param in model.named_parameters():
-        if name == "mem_tokens" or name == "special_tokens" or name == "learned_mem_position_ids":
+        if name == "mem_tokens" or name == "special_tokens":
             continue
         param.requires_grad = False
 
